@@ -427,7 +427,7 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 
 OpenShift requires that communication against the webhook be encrypted.
 
-This script calls another script that uses `openssl` to issue a certificate signing request (CSR), and then asks OpenShift to approve said CSR
+This script calls another script that uses `openssl` to issue a certificate signing request (CSR), and then asks OpenShift to approve said CSR.
 
 Critically, it's _OpenShift_ that approves the CSR (and not just some one-off `openssl` command creating a self-signed certificate).  This means that the webhook's certificate is trusted _under the aegis of the OpenShift internal certificate authority_; no special work is required to tell the webhook client to trust it.
 
@@ -734,3 +734,73 @@ metadata:
     app.kubernetes.io/version: not_available
 ...
 ```
+
+# Troubleshooting
+
+Try the following tips when troubleshooting problems with admission webhooks:
+
+## Are admission webhooks enabled?
+
+Recall that admission webhooks aren't enabled by default.  After enabling them in `master-config.yaml` and restarting the master API services, check the master logs.
+
+Make sure that the admission webhook plugins are **registered** and **loaded**.
+
+```
+/usr/local/bin/master-logs api api 2>&1 | grep -E "admission (plugin|controller).+AdmissionWebhook"
+```
+
+## Is OpenShift calling the admission webhooks?
+
+OpenShift doesn't try calling any webhooks until a `MutatingWebhookConfiguration` or `ValidatingWebhookConfiguration` object exist.
+
+Even after a webhook configuration has been defined, there are a number of ways the configuration can go wrong and cause the webhook not to be called.
+
+* Does a `MutatingWebhookConfiguration ` or `ValidatingWebhookConfiguration` object exist?
+* Does the value of the `webhooks[*].clientConfig.caBundle` field match the certificate in use by the webhook?
+* Does the `webhooks[*].clientConfig.service` field describe a valid webhook?
+  * Are the `namespace`, `name`, and `path` spelled correctly? (Seriously!)
+  * Is the webhook service running?  Listening on TCP port 443?  Serving the endpoint described in the `path:` field?
+  * What appears on the logs of the pod(s) implementing the webhook service?
+  * Are the `webhooks[*].rules` too narrow, such that the expected objects aren't eligible for submission to the webhook?
+
+## Failure test
+
+If your webhook isn't producing the expected results, and isn't giving any obvious signs of trouble, you might consider creating a **known-bad** webhook configuration.
+
+You can duplicate a connectivity failure in an environment where admission webhooks are enabled like so.  This allows you to rule out whether or not your webhook isn't getting called.
+
+Here's an example in which we create a known-bad admission webhook-- it points to a service that doesn't exist.
+
+We attempt to create a `secret`, the only resource type covered in this configuration, and we watch the error we receive:
+
+```
+$ cat > invalid-webhook.yaml <<"EOF"
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: invalid-webhook
+webhooks:
+- clientConfig:
+    service:
+      name: service-doesnt-exist
+      namespace: default
+      path: /mutate
+  failurePolicy: Fail
+  name: mutating-admission-demo-webhook.example.com
+  rules:
+  - apiGroups:
+    - "*"
+    apiVersions:
+    - "*"
+    operations:
+    - "*"
+    resources:
+    - secrets
+EOF
+$ 
+
+$ oc create -f invalid-webhook.yaml
+mutatingwebhookconfiguration.admissionregistration.k8s.io/invalid-webhook created
+
+$ oc create secret generic my-new-secret
+Error from server (InternalError): Internal error occurred: failed calling admission webhook "mutating-admission-demo-webhook.example.com": Post https://service-doesnt-exist.default.svc:443/mutate?timeout=30s: service "service-doesnt-exist" not found
