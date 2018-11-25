@@ -1,0 +1,89 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: openshift-template-demo-webhook
+  labels:
+    demo: demo-webhook
+objects:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: demo-webhook-deployment
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: demo-webhook
+    template:
+      metadata:
+        labels:
+          app: demo-webhook
+          demo: demo-webhook
+      spec:
+        containers:
+          - name: demo-webhook
+            image: ${DOCKER_REGISTRY_SERVICE}/demo-webhook/demo-admission-webhook:latest
+            imagePullPolicy: Always
+            args:
+              - -tlsCertFile=/etc/webhook/certs/cert.pem
+              - -tlsKeyFile=/etc/webhook/certs/key.pem
+              - -alsologtostderr
+              - -v=4
+              - 2>&1
+            volumeMounts:
+              - name: webhook-certs
+                mountPath: /etc/webhook/certs
+                readOnly: true
+        volumes:
+          - name: webhook-certs
+            secret:
+              secretName: demo-webhook-certs
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: demo-webhook-svc
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  spec:
+    ports:
+    - port: 443
+      targetPort: 8443
+    selector:
+      app: demo-webhook
+- apiVersion: admissionregistration.k8s.io/v1beta1
+  kind: MutatingWebhookConfiguration
+  metadata:
+    name: demo-webhook-cfg
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  webhooks:
+    - name: mutating-admission-demo-webhook.example.com
+      clientConfig:
+        service:
+          name: demo-webhook-svc
+          namespace: demo-webhook
+          path: "/mutate"
+        caBundle: ${CA_BUNDLE}
+      rules:
+        - operations: [ "CREATE" ]
+          apiGroups: ["apps", ""]
+          apiVersions: ["v1"]
+          resources: ["deployments","services"]
+      namespaceSelector:
+        matchLabels:
+          demo: demo-webhook
+      failurePolicy: Ignore
+parameters:
+- description: hostname:port tuple for cluster-internal image registry
+  name: DOCKER_REGISTRY_SERVICE
+  required: true
+  value: docker-registry.default.svc:5000
+- description: The OpenShift internal CA bundle, an X.509 certificate in PEM format, and then base64-encoded
+  name: CA_BUNDLE
+  required: true
+  value: LS0tLS1CRUdJT...

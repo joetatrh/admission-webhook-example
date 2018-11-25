@@ -1,0 +1,8 @@
+export GOROOT=~/demo-webhook/go
+export GOPATH=~/demo-webhook
+export GOBIN=${GOROOT}/bin
+
+if ! echo $PATH | tr : '\n' | grep -q -x "${GOBIN}"
+then
+	export PATH="${GOBIN}:${PATH}"
+fi

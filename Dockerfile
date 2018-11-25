@@ -1,4 +1,5 @@
-FROM alpine:latest
+FROM rhel7:latest
 
-ADD admission-webhook-example /admission-webhook-example
-ENTRYPOINT ["./admission-webhook-example"]
+ADD demo-admission-webhook /demo-admission-webhook
+ENTRYPOINT ["./demo-admission-webhook"]
+EXPOSE 8443

@@ -1,0 +1,6 @@
+OC_TOKEN="$(oc whoami -t)"
+
+DOCKER_REGISTRY_ROUTE="$(oc -n default get route docker-registry -o jsonpath='{.spec.host}')"
+DOCKER_REGISTRY_SERVICE="docker-registry.default.svc:$(oc -n default get service docker-registry -o jsonpath='{.spec.ports[0].port}')"
+
+CA_BUNDLE=$(oc -n kube-system exec $(basename $(oc -n kube-system get pod -l openshift.io/component=api,openshift.io/control-plane=true -o name | head -n1)) -- cat /etc/origin/master/admin.kubeconfig | grep -m1 certificate-authority-data: | awk '{print $NF}')
