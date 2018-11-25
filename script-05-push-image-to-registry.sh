@@ -1,6 +1,5 @@
 #!/bin/bash
 
-. govars
 . ocpvars
 
 echo logging in to OCP-internal container registry

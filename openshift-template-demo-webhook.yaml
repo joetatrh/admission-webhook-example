@@ -83,7 +83,7 @@ parameters:
   name: DOCKER_REGISTRY_SERVICE
   required: true
   value: docker-registry.default.svc:5000
-- description: The OpenShift internal CA bundle, an X.509 certificate in PEM format, and then base64-encoded
+- description: The cert and key protecting the webhook, issued by the trusted OpenShift internal CA.  These are X.509 certificates in PEM format, and then base64-encoded.
   name: CA_BUNDLE
   required: true
   value: LS0tLS1CRUdJT...

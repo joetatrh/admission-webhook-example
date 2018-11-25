@@ -151,6 +151,14 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 ./script-01-go-binaries.sh
 ```
 
+### Closer look: `script-01-go-binaries.sh`
+
+This script downloads
+* a [pre-built distribution of `go`](https://dl.google.com/go/go1.11.2.linux-amd64.tar.gz)
+* the [`dep` dependency manager](https://raw.githubusercontent.com/golang/dep/master/install.sh)
+
+and places them both into various locations beneath `~/demo-webhook`.
+
 ### Optional: Confirm that the new binaries exist
 
 The newly-downloaded binaries should appear beneath `~/demo-webhook`.
@@ -171,6 +179,15 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 ./script-02-go-deps.sh
 ```
 
+### Closer look: `script-02-go-deps.sh`
+
+This script runs the commands to download this project's `go` dependencies, and to validate them:
+
+```
+go get -d ./...
+dep ensure -v
+```
+
 # Build and push the demo admission webhook
 
 In a later step, we'll create a webhook configuration that tells OpenShift to submit certain API objects to a running web server.
@@ -186,6 +203,14 @@ Build the demo admission webhook from source.
 ```
 cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook-demo/
 ./script-03-build-webhook-code.sh
+```
+
+### Closer look: `script-03-build-webhook-code.sh`
+
+This script compiles the `go` code for the admission webhook:
+
+```
+CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o demo-admission-webhook
 ```
 
 ### Optional: confirm that the webhook was built
@@ -206,6 +231,16 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 ./script-04-build-webhook-image.sh
 ```
 
+### Closer look: `script-04-build-webhook-image.sh`
+
+This script rolls the webhook binary into a new container image.
+
+It uses `buildah build-using-dockerfile` (as opposed to `docker build`).  `buildah` doesn't require that a local docker daemon be running.
+
+```
+sudo buildah build-using-dockerfile -t ${DOCKER_REGISTRY_ROUTE}/demo-webhook/demo-admission-webhook .
+```
+
 ### Optional: confirm that the container image was built
 
 If you'd like, feel free to verify that the new container image has been built.
@@ -221,6 +256,24 @@ IMAGE ID      IMAGE NAME                               CREATED AT          SIZE
 ```
 cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook-demo/
 ./script-05-push-image-to-registry.sh
+```
+
+### Closer look: `script-05-push-image-to-registry.sh`
+
+This script takes the newly-built container image and pushes it into the OCP integrated registry.
+
+It uses `podman login` as a drop-in replacement for `docker login` and `buildah push` for `docker push`.
+
+The script assumes that a `cluster-admin` user is already logged into the `oc` client, and it issues a couple `oc` commands to get certain values it needs (such as the OCP user's token and the route into the OCP integrated registry).  To get these values, it sources the `ocpvars` shell script.
+
+```
+. ocpvars
+
+sudo podman login -u openshift -p ${OC_TOKEN} ${DOCKER_REGISTRY_ROUTE} --tls-verify=false
+
+sudo buildah push --tls-verify=false \
+  ${DOCKER_REGISTRY_ROUTE}/demo-webhook/demo-admission-webhook:latest \
+  docker://${DOCKER_REGISTRY_ROUTE}/demo-webhook/demo-admission-webhook:latest
 ```
 
 ### Optional: confirm that the image has been pushed to the registry
@@ -370,6 +423,30 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 ./script-06-create-secret.sh
 ```
 
+#### Closer look: `script-06-create-secret.sh`
+
+OpenShift requires that communication against the webhook be encrypted.
+
+This script calls another script that uses `openssl` to issue a certificate signing request (CSR), and then asks OpenShift to approve said CSR
+
+Critically, it's _OpenShift_ that approves the CSR (and not just some one-off `openssl` command creating a self-signed certificate).  This means that the webhook's certificate is trusted _under the aegis of the OpenShift internal certificate authority_; no special work is required to tell the webhook client to trust it.
+
+The certificate and private key that the script generates are stored inside a secret.  This makes it easy for the webhook pod (created in the next step) to "plug in" and use this (already-trusted) certificate.
+
+This script invokes another script
+```./deployment/webhook-create-signed-cert.sh --service demo-webhook --namespace demo-webhook --secret demo-webhook-certs```
+, the major actions of which are to:
+
+* write out the body of an `openssl`-flavored certificate signing request, including `subjectAltNames` matching the name that the webhook client will request via TLS SNI
+* generate a private key with `openssl genrsa`
+* generate a certificate-signing request (`openssl req`)
+* submit the certificate-signing request to OpenShift
+  * this works by creating an OpenShift object of type `CertificateSigningRequest`, where the contents of the CSR are copied into the `request:` field
+* instruct OpenShift to approve the CSR and issue a new certificate 
+  * the script uses the command `kubectl certificate approve`
+  * `oc adm certificate approve` is the OpenShift equivalent
+* copy the key and cert from the newly-created certificate into a new `secret`
+
 #### Optional: Confirm that the webhook secret exists
 
 ```
@@ -387,6 +464,104 @@ cd ~/demo-webhook/src/github.com/joetatrh/openshift-admission-controller-webhook
 ./script-07-create-webhook.sh
 ```
 
+#### Closer look: `script-07-create-webhook.sh`
+
+This script instantiates a group of objects processed from a template.
+
+The contents of the template, `openshift-template-demo-webhook.yaml`, appear below:
+
+```
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: openshift-template-demo-webhook
+  labels:
+    demo: demo-webhook
+objects:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: demo-webhook-deployment
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: demo-webhook
+    template:
+      metadata:
+        labels:
+          app: demo-webhook
+          demo: demo-webhook
+      spec:
+        containers:
+          - name: demo-webhook
+            image: ${DOCKER_REGISTRY_SERVICE}/demo-webhook/demo-admission-webhook:latest
+            imagePullPolicy: Always
+            args:
+              - -tlsCertFile=/etc/webhook/certs/cert.pem
+              - -tlsKeyFile=/etc/webhook/certs/key.pem
+              - -alsologtostderr
+              - -v=4
+              - 2>&1
+            volumeMounts:
+              - name: webhook-certs
+                mountPath: /etc/webhook/certs
+                readOnly: true
+        volumes:
+          - name: webhook-certs
+            secret:
+              secretName: demo-webhook-certs
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: demo-webhook-svc
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  spec:
+    ports:
+    - port: 443
+      targetPort: 8443
+    selector:
+      app: demo-webhook
+- apiVersion: admissionregistration.k8s.io/v1beta1
+  kind: MutatingWebhookConfiguration
+  metadata:
+    name: demo-webhook-cfg
+    labels:
+      app: demo-webhook
+      demo: demo-webhook
+  webhooks:
+    - name: mutating-admission-demo-webhook.example.com
+      clientConfig:
+        service:
+          name: demo-webhook-svc
+          namespace: demo-webhook
+          path: "/mutate"
+        caBundle: ${CA_BUNDLE}
+      rules:
+        - operations: [ "CREATE" ]
+          apiGroups: ["apps", ""]
+          apiVersions: ["v1"]
+          resources: ["deployments","services"]
+      namespaceSelector:
+        matchLabels:
+          demo: demo-webhook
+      failurePolicy: Ignore
+parameters:
+- description: hostname:port tuple for cluster-internal image registry
+  name: DOCKER_REGISTRY_SERVICE
+  required: true
+  value: docker-registry.default.svc:5000
+- description: The cert and key protecting the webhook, issued by the trusted OpenShift internal CA.  These are X.509 certificates in PEM format, and then base64-encoded.
+  name: CA_BUNDLE
+  required: true
+  value: LS0tLS1CRUdJT...
+```
+
 #### Optional: Confirm that the webhook objects exist
 
 ```
@@ -400,42 +575,11 @@ $
 
 #### The webhook config
 
-The `MutatingWebhookConfiguration` is shown below; it's the most important part of setting up a webhook.
+The `MutatingWebhookConfiguration` is the most important part of setting up a webhook.
 
 This configuration tells OpenShift under what circumstances it needs to submit objects to an admission webhook (the `rules`), and where to find and how to communicate with the webhook (`webhooks.clientConfig`), which happens to be a plain HTTP server.
 
-```
-apiVersion: admissionregistration.k8s.io/v1beta1
-kind: MutatingWebhookConfiguration
-metadata:
-  labels:
-    app: demo-webhook
-    demo: demo-webhook
-  name: demo-webhook-cfg
-webhooks:
-- clientConfig:
-    caBundle: LS0tL...
-    service:
-      name: demo-webhook-svc
-      namespace: demo-webhook
-      path: /mutate
-  failurePolicy: Ignore
-  name: mutating-admission-demo-webhook.example.com
-  namespaceSelector:
-    matchLabels:
-      demo: demo-webhook
-  rules:
-  - apiGroups:
-    - apps
-    - ""
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    resources:
-    - deployments
-    - services
-```
+Unless the `MutatingWebhookConfiguration` exists, the webhook doesn't have a chance of being invoked.
 
 # Test the mutating admission webhook
 
