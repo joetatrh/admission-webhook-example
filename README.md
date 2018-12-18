@@ -97,7 +97,6 @@ A project for the demo webhook must exist ahead of time, even before we try to c
 
 ```
 oc new-project demo-webhook
-oc label namespace demo-webhook demo=demo-webhook --overwrite
 ```
 
 ## Identify a build host

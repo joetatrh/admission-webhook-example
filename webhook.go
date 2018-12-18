@@ -100,19 +100,8 @@ func admissionRequired(ignoredList []string, admissionAnnotationKey string, meta
 		}
 	}
 
-	annotations := metadata.GetAnnotations()
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-
-	var required bool
-	switch strings.ToLower(annotations[admissionAnnotationKey]) {
-	default:
-		required = true
-	case "n", "no", "false", "off":
-		required = false
-	}
-	return required
+	// always return true, regardless of admissionAnotationKey
+	return true
 }
 
 func mutationRequired(ignoredList []string, metadata *metav1.ObjectMeta) bool {

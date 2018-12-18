@@ -74,9 +74,6 @@ objects:
           apiGroups: ["apps", ""]
           apiVersions: ["v1"]
           resources: ["deployments","services"]
-      namespaceSelector:
-        matchLabels:
-          demo: demo-webhook
       failurePolicy: Ignore
 parameters:
 - description: hostname:port tuple for cluster-internal image registry
